@@ -104,6 +104,18 @@ Returns T if the connectivity URL returns 2xx, NIL otherwise."
     channel-id
     (escape-json-string message)))
 
+(defun decode-body (body)
+  "Decode a Drakma response body to a string.
+If BODY is already a string, return it. If it is a byte vector,
+decode it as UTF-8."
+  (typecase body
+    (string body)
+    (vector
+      (handler-case
+        (flexi-streams:octets-to-string body :external-format :utf-8)
+        (error () body)))
+    (t body)))
+
 (defun send-mm (message config)
   "Send a Mattermost message via the REST API.
 POSTs to <mattermost-url>/api/v4/posts with channel_id and message.
@@ -123,18 +135,19 @@ Returns T on success, NIL on failure."
             `(("Authorization" . ,(format nil "Bearer ~a"
                                     (getf config :mattermost-token))))
           :content json)
-        (cond
-          ((and (= status-code 200)
-             (search "\"id\"" (or body "")))
-            (pl:pinfo :in "send-mm"
-              :status "sent mattermost message" :message message)
-            t)
-          (t
-            (pl:perror :in "send-mm"
-              :status "failed to send mattermost message"
-              :status-code status-code
-              :body (or body ""))
-            nil)))
+        (let ((body-str (decode-body body)))
+          (cond
+            ((and (<= 200 status-code 299)
+               (search "\"id\"" (or body-str "")))
+              (pl:pinfo :in "send-mm"
+                :status "sent mattermost message" :message message)
+              t)
+            (t
+              (pl:perror :in "send-mm"
+                :status "failed to send mattermost message"
+                :status-code status-code
+                :body (or body-str ""))
+              nil))))
       (error (e)
         (pl:perror :in "send-mm"
           :status "failed to send mattermost message" :error e)

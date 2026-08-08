@@ -2,7 +2,7 @@
   :description "Monitor web sites and send Mattermost alerts"
   :author "Donnie"
   :license "MIT"
-  :depends-on (:drakma :dc-eclectic :dc-time :p-log :cl-ppcre :hunchentoot :swank)
+  :depends-on (:drakma :flexi-streams :dc-eclectic :dc-time :p-log :cl-ppcre :hunchentoot :swank)
   :components ((:file "monitor-sites-package")
                 (:file "eval-safely")
                 (:file "read-conf")
