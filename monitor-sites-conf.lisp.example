@@ -1,0 +1,18 @@
+'(:check-interval 300
+   :retry-connectivity-time 30
+   :lost-connectivity-time 300
+   :max-connectivity-retries 5
+   :connectivity-urls ("http://www.msftconnecttest.com/connecttest.txt"
+                        "http://www.detectportal.firefox.com/")
+   :mattermost-url "<your-mattermost-url>"
+   :mattermost-token "XXXXXXXXXXXXXXXXXXXXXXXXXX"
+   :mattermost-channel-id "XXXXXXXXXXXXXXXXXXXXXXXXXX"
+   :max-log-lines 10000
+   :http-port 8083
+   :log-path "monitor-sites.log"
+   :ca-directory "/etc/ssl/certs"
+   :ca-cert "ca-bundle.crt"
+   :user-agent "Monitor Sites <your-email-address>"
+   :sites (:sinister-code (:name "Site #1"
+                            :url "<site-1-url>"
+                            :expect "<some-string>")))

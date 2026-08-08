@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitor-sites
+  namespace: monitor-sites
+  labels:
+    app: monitor-sites
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitor-sites
+  template:
+    metadata:
+      labels:
+        app: monitor-sites
+    spec:
+      containers:
+        - name: monitor-sites
+          image: monitor-sites:latest
+          env:
+            - name: MONITOR_SITES_CONF
+              value: /etc/monitor-sites/monitor-sites.conf
+          volumeMounts:
+            - name: config
+              mountPath: /etc/monitor-sites
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: monitor-sites

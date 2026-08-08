@@ -1,0 +1,107 @@
+#!/bin/bash
+set -euo pipefail
+
+PROG_NAME="monitor-sites"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONF_FILE="${MONITOR_SITES_CONF:-$SCRIPT_DIR/monitor-sites-conf.lisp}"
+DEFAULT_PORT=8083
+
+# Read :http-port from the config file, fall back to default.
+get_http_port() {
+    local port
+    port=$(grep ':http-port' "$CONF_FILE" 2>/dev/null \
+           | head -1 \
+           | sed 's/.*:http-port[[:space:]]*//' \
+           | tr -cd '0-9')
+    echo "${port:-$DEFAULT_PORT}"
+}
+
+# Check if the control server is responding.
+# Returns 0 (up) or 1 (down).
+is_up() {
+    local port
+    port=$(get_http_port)
+    curl --silent --connect-timeout 2 \
+         "http://127.0.0.1:${port}/health" \
+         >/dev/null 2>&1
+}
+
+cmd_start() {
+    if is_up; then
+        echo "$PROG_NAME is already running"
+        return 0
+    fi
+    echo "starting $PROG_NAME"
+    cd "$SCRIPT_DIR"
+    nohup ros run -- \
+        --disable-debugger \
+        --eval "(require :monitor-sites)" \
+        --eval "(in-package :monitor-sites)" \
+        --eval "(main)" \
+        --quit \
+        </dev/null >> /dev/null 2>&1 &
+    echo "$PROG_NAME started (pid $!)"
+}
+
+cmd_stop() {
+    if ! is_up; then
+        echo "$PROG_NAME is not running"
+        return 0
+    fi
+    local port
+    port=$(get_http_port)
+    echo "stopping $PROG_NAME"
+    curl --silent --request DELETE \
+         "http://127.0.0.1:${port}/health" \
+         >/dev/null 2>&1
+    # Wait for the process to exit
+    local count=0
+    while is_up && [ $count -lt 10 ]; do
+        sleep 0.5
+        count=$((count + 1))
+    done
+    echo "$PROG_NAME stopped"
+}
+
+cmd_status() {
+    if is_up; then
+        echo "up"
+    else
+        echo "down"
+    fi
+}
+
+cmd_logs() {
+    local log_path
+    log_path=$(grep ':log-path' "$CONF_FILE" 2>/dev/null \
+               | head -1 \
+               | sed 's/.*:log-path[[:space:]]*"//' \
+               | sed 's/".*//')
+    if [ -z "$log_path" ]; then
+        echo "no :log-path found in config" >&2
+        exit 1
+    fi
+    if [ ! -f "$log_path" ]; then
+        echo "log file not found: $log_path" >&2
+        exit 1
+    fi
+    tail -f "$log_path"
+}
+
+usage() {
+    cat <<EOF
+Usage: $PROG_NAME {start|stop|status|logs}
+  start  — start the monitor (no-op if already running)
+  stop   — stop the monitor (no-op if not running)
+  status — print 'up' or 'down'
+  logs   — tail the log file
+EOF
+}
+
+case "${1:-}" in
+    start)  cmd_start ;;
+    stop)   cmd_stop ;;
+    status) cmd_status ;;
+    logs)   cmd_logs ;;
+    *)      usage; exit 1 ;;
+esac
