@@ -212,12 +212,21 @@ pickup.
 
 ## Dependencies
 
+This project is built with [Roswell](https://github.com/roswell/roswell), a
+Common Lisp implementation manager and launcher.
+
 - [drakma](https://edicl.github.io/drakma/) — HTTP client
 - [hunchentoot](https://edicl.github.io/hunchentoot/) — control server
 - [cl-ppcre](https://edicl.github.io/cl-ppcre/) — regex (content matching)
 - [flexi-streams](https://edicl.github.io/flexi-streams/) — byte stream decoding
 - [swank](https://common-lisp.dev/project/slime/) — remote REPL
-- dc-eclectic, dc-time, p-log — local projects by the same author
+- [trivial-utf-8](https://gitlab.common-lisp.net/trivial-utf-8/trivial-utf-8) — UTF-8 encoding
+- [uiop](https://common-lisp.net/project/asdf/uiop.html) — utilities
+- [dc-dlist](https://github.com/macnod/dc-dlist) — doubly-linked list
+- [dc-ds](https://github.com/macnod/dc-ds) — data structure utilities
+- [dc-time](https://github.com/macnod/dc-time) — timestamp utilities
+- [p-log](https://github.com/macnod/p-log) — logging
+- [dc-eclectic](https://github.com/macnod/dc-eclectic) — general utilities
 
 ## License
 
