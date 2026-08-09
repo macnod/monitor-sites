@@ -17,7 +17,8 @@ spec:
     spec:
       containers:
         - name: monitor-sites
-          image: monitor-sites:latest
+          image: monitor-sites:dev
+          imagePullPolicy: IfNotPresent
           env:
             - name: MONITOR_SITES_CONF
               value: /etc/monitor-sites/monitor-sites.conf
@@ -28,10 +29,10 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 64Mi
+              memory: 256Mi
             limits:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 500m
+              memory: 2Gi
       volumes:
         - name: config
           configMap:

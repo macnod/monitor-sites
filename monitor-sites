@@ -26,6 +26,15 @@ is_up() {
          >/dev/null 2>&1
 }
 
+cmd_start_in_container() {
+    cd "$SCRIPT_DIR"
+    exec ros run -- \
+        --disable-debugger \
+        --eval "(require :monitor-sites)" \
+        --eval "(in-package :monitor-sites)" \
+        --eval "(main)"
+}
+
 cmd_start() {
     if is_up; then
         echo "$PROG_NAME is already running"
@@ -90,18 +99,20 @@ cmd_logs() {
 
 usage() {
     cat <<EOF
-Usage: $PROG_NAME {start|stop|status|logs}
-  start  — start the monitor (no-op if already running)
-  stop   — stop the monitor (no-op if not running)
-  status — print 'up' or 'down'
-  logs   — tail the log file
+Usage: $PROG_NAME {start|start-in-container|stop|status|logs}
+  start               — start the monitor (no-op if already running)
+  start-in-container  — run in foreground (for Docker/k8s entrypoint)
+  stop                — stop the monitor (no-op if not running)
+  status              — print 'up' or 'down'
+  logs                — tail the log file
 EOF
 }
 
 case "${1:-}" in
-    start)  cmd_start ;;
-    stop)   cmd_stop ;;
-    status) cmd_status ;;
-    logs)   cmd_logs ;;
-    *)      usage; exit 1 ;;
+    start)              cmd_start ;;
+    start-in-container) cmd_start_in_container ;;
+    stop)               cmd_stop ;;
+    status)             cmd_status ;;
+    logs)               cmd_logs ;;
+    *)                  usage; exit 1 ;;
 esac

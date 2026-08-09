@@ -36,14 +36,15 @@ Or directly via Slime/REPL:
 
 ## The Shell Script
 
-The `monitor-sites` script provides four commands:
+The `monitor-sites` script provides five commands:
 
-| Command | Description                                      |
-|---------|--------------------------------------------------|
-| `start`  | Start the monitor (no-op if already running)    |
-| `stop`   | Stop the monitor via the control server (no-op if not running) |
-| `status` | Print `up` or `down`                            |
-| `logs`   | Tail the log file                               |
+| Command               | Description                                      |
+|-----------------------|--------------------------------------------------|
+| `start`               | Start the monitor (no-op if already running)    |
+| `start-in-container`  | Run in foreground (for Docker/k8s entrypoint)   |
+| `stop`                | Stop the monitor via the control server (no-op if not running) |
+| `status`              | Print `up` or `down`                            |
+| `logs`                | Tail the log file                               |
 
 The script reads `:http-port` from the config to locate the control
 server (default 8083). It uses `MONITOR_SITES_CONF` to find the config
@@ -171,24 +172,43 @@ ever entering the debugger.
 
 ## Kubernetes Deployment
 
+### First-time setup
+
 ```sh
-# Create namespace
+# Build and import the image
+docker build -t monitor-sites:dev .
+k3d image import monitor-sites:dev -c evo-x2
+
+# Create namespace and apply manifests
 kubectl create namespace monitor-sites
-
-# Apply manifests
-kubectl apply -f kube/
-
-# Update config (picked up on next cycle, no restart needed)
-kubectl edit configmap monitor-sites -n monitor-sites
+kubectl apply -f kube/configmap.yaml
+kubectl apply -f kube/deployment.yaml
 ```
 
 The ConfigMap is mounted at `/etc/monitor-sites/monitor-sites.conf`
 and the `MONITOR_SITES_CONF` env var points to it.
 
-> **Note:** The kube manifests in `kube/` use older config key names
-> (`:mm-url`, `:connectivity-url`, etc.) and the `.conf` extension.
-> Update them to match `monitor-sites-conf.lisp.example` before
-> deploying.
+> **Note:** `kube/configmap.yaml` contains real Mattermost credentials
+> and is gitignored. It is not committed to the repository.
+
+### Operations
+
+| Operation           | Command                                                              |
+|---------------------|----------------------------------------------------------------------|
+| View pods           | `kubectl -n monitor-sites get pods`                                  |
+| Tail logs           | `kubectl -n monitor-sites logs -f deploy/monitor-sites`              |
+| Previous pod logs   | `kubectl -n monitor-sites logs --previous deploy/monitor-sites`      |
+| Health check        | `kubectl -n monitor-sites exec deploy/monitor-sites -- curl -sS http://127.0.0.1:8083/health` |
+| Restart             | `kubectl -n monitor-sites rollout restart deploy/monitor-sites`      |
+| Stop (pause)        | `kubectl -n monitor-sites scale deploy/monitor-sites --replicas=0`   |
+| Start (resume)      | `kubectl -n monitor-sites scale deploy/monitor-sites --replicas=1`   |
+| Edit config         | Edit `kube/configmap.yaml` → `kubectl apply -f kube/configmap.yaml` → `kubectl -n monitor-sites rollout restart deploy/monitor-sites` |
+| Swank REPL          | `kubectl -n monitor-sites port-forward deploy/monitor-sites 4011:4011` |
+| Rebuild image       | `docker build -t monitor-sites:dev . && k3d image import monitor-sites:dev -c evo-x2 && kubectl -n monitor-sites rollout restart deploy/monitor-sites` |
+
+Config is re-read every cycle, but ConfigMap volume updates have sync
+lag. Always `rollout restart` after ConfigMap changes for deterministic
+pickup.
 
 ## Dependencies
 

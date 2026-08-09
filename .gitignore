@@ -24,4 +24,5 @@
 
 # Configuration
 monitor-sites-conf.lisp
+kube/configmap.yaml
 *.log

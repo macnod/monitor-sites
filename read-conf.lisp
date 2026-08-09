@@ -5,6 +5,11 @@
   "monitor-sites.log"
   :severity-threshold :info)
 
+(pl:make-log-stream
+  "monitor-sites-stdout"
+  *standard-output*
+  :severity-threshold :info)
+
 (defun report (severity plist)
   (pl:plog severity plist)
   (when (equal severity :error)
@@ -296,6 +301,8 @@
                                  :path ,path :type ,type)))))
 
 (defun load-config ()
-  (let ((conf (cadr (read-from-string (u:slurp "monitor-sites-conf.lisp")))))
+  (let* ((path (or (u:getenv "MONITOR_SITES_CONF")
+                   "monitor-sites-conf.lisp"))
+         (conf (cadr (read-from-string (u:slurp path)))))
     (valid-conf conf)
     conf))
