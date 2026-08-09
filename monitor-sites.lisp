@@ -14,6 +14,15 @@
   alert deduplication — a site is added when first reported down and
   removed when it recovers.")
 
+(defvar *site-down-counts* nil
+  "Plist mapping site keys to outage counts since last heartbeat.")
+
+(defvar *connectivity-loss-count* 0
+  "Number of connectivity losses since last heartbeat.")
+
+(defvar *heartbeat-elapsed* 0
+  "Seconds accumulated since last heartbeat send.")
+
 (defun http-get (url conf &optional (site-key :none))
   "Wrapper around DRAKMA:HTTP-REQUEST.
 Sets user-agent from CONFIG, enables TLS verification.
@@ -204,6 +213,7 @@ If connectivity is lost, notify once and sleep."
             ;; Exceeded retries: declare connectivity lost
             ((> cx-count max-retries)
               (unless *cx-lost-notified*
+                (incf *connectivity-loss-count*)
                 (when (send-mm "evo-x2 has lost connectivity to the internet."
                         config)
                   (setq *cx-lost-notified* t)))
@@ -226,6 +236,7 @@ If down, enter the connectivity retry loop."
                   (delete site-key *sites-down-notified*)))))
       (t
         (pl:pinfo :in "ping-site" :site name :status "down")
+        (incf (getf *site-down-counts* site-key 0))
         (connectivity-retry-loop site-key config)))))
 
 ;;; ================================================================
@@ -310,6 +321,40 @@ Idempotent — no-op if already running."
     (pl:pinfo "stopped control server")))
 
 ;;; ================================================================
+;;; Heartbeat
+;;; ================================================================
+
+(defun build-heartbeat-message ()
+  "Build the heartbeat message string from accumulated stats."
+  (let ((down-sites
+          (loop for (key count) on *site-down-counts* by #'cddr
+            when (> count 0)
+            collect (cons key count))))
+    (if (and (null down-sites) (zerop *connectivity-loss-count*))
+      "Monitor Sites is still running. No outages since last heartbeat."
+      (with-output-to-string (s)
+        (format s "Monitor Sites is still running.~%")
+        (format s "~%Outages since last heartbeat:~%")
+        (loop for (key . count) in down-sites
+          do (format s "  ~a: ~d~%"
+               (u:tree-get *conf* :sites key :name) count))
+        (format s "Connectivity losses: ~d"
+          *connectivity-loss-count*)))))
+
+(defun maybe-send-heartbeat ()
+  "Send heartbeat if interval has elapsed. Reset stats on send."
+  (let ((interval (getf *conf* :heartbeat-interval)))
+    (when (and (> interval 0) (>= *heartbeat-elapsed* interval))
+      (let ((message (build-heartbeat-message)))
+        (when (send-mm message *conf*)
+          (setq
+            *heartbeat-elapsed* 0
+            *site-down-counts* nil
+            *connectivity-loss-count* 0))
+        (pl:pinfo :in "maybe-send-heartbeat" :status "heartbeat sent"
+          :message message)))))
+
+;;; ================================================================
 ;;; Main Loop
 ;;; ================================================================
 
@@ -328,6 +373,9 @@ Assumes *CONF* is non-nil."
       (when (send-mm "evo-x2 connectivity to the internet has been restored."
               *conf*)
         (setq *cx-lost-notified* nil)))
+    ;; Heartbeat
+    (incf *heartbeat-elapsed* (getf *conf* :check-interval))
+    (maybe-send-heartbeat)
     (pl:pinfo :in "main" :status "cycle complete")))
 
 (defun main ()

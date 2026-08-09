@@ -28,6 +28,7 @@ data:
       :ca-directory "/etc/ssl/certs"
       :ca-cert "/app/ca-bundle.crt"
       :user-agent "Monitor Sites <your-email>"
+      :heartbeat-interval 84600
       :sites (:sinister-code (:name "Website #1"
                                :url "<url>"
                                :expect "Website #1")))

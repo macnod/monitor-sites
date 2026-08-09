@@ -75,6 +75,7 @@ restarting. See `monitor-sites-conf.lisp.example` for the full format.
 | `:ca-directory`              | string  | Directory containing CA certificates                    |
 | `:ca-cert`                   | string  | CA certificate bundle filename                          |
 | `:user-agent`                | string  | Default User-Agent for HTTP requests                    |
+| `:heartbeat-interval`        | integer | Seconds between heartbeat notifications, 0 disables (0-604800, default 84600) |
 | `:sites`                     | map     | Site definitions (see below)                            |
 
 ### Site entries
@@ -148,6 +149,19 @@ When a site is down:
 - Connectivity loss is tracked with `*cx-lost-notified*`. When
   connectivity is restored, a "connectivity restored" notification is
   sent.
+
+### Heartbeat
+
+Monitor Sites sends a periodic "still alive" heartbeat to Mattermost
+to confirm it is running. The interval is controlled by
+`:heartbeat-interval` (default 84600 seconds, just under 24 hours).
+Set it to 0 to disable the heartbeat entirely.
+
+Each heartbeat message includes outage statistics accumulated since
+the last heartbeat: the number of times each site went down, and the
+number of connectivity losses. These stats are in-memory only and
+reset to zero after each successful heartbeat send. They do not
+survive restarts.
 
 ## Control Server
 

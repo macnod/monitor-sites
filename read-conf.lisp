@@ -35,6 +35,7 @@
      :ca-directory (:type :string :min-length 2 :max-length 250)
      :ca-cert (:type :string :min-length 2 :max-length 250)
      :user-agent (:type :string :min-length 2 :max-length 200)
+     :heartbeat-interval (:type :integer :min 0 :max 604800)
      :sites (:type :map
               :min-length 1
               :max-length 100
