@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitor-sites
+  namespace: monitor-sites
+data:
+  monitor-sites.conf: |
+    '(:check-interval 300
+      :retry-connectivity-time 30
+      :lost-connectivity-time 300
+      :max-connectivity-retries 5
+      :connectivity-urls ("http://www.msftconnecttest.com/connecttest.txt"
+                          "http://detectportal.firefox.com/success.txt"
+                          "http://connectivitycheck.gstatic.com/generate_204"
+                          "http://clients3.google.com/generate_204"
+                          "http://captive.apple.com/hotspot-detect.html"
+                          "http://www.apple.com/library/test/success.html"
+                          "http://connectivity-check.ubuntu.com/"
+                          "https://www.cloudflare.com/cdn-cgi/trace"
+                          "https://cp.cloudflare.com/"
+                          "http://neverssl.com/")
+      :mattermost-url "<url>"
+      :mattermost-token "<token>"
+      :mattermost-channel-id "<channel-id>"
+      :max-log-lines 10000
+      :http-port 8083
+      :log-path "/app/monitor-sites.log"
+      :ca-directory "/etc/ssl/certs"
+      :ca-cert "/app/ca-bundle.crt"
+      :user-agent "Monitor Sites <your-email>"
+      :sites (:sinister-code (:name "Website #1"
+                               :url "<url>"
+                               :expect "Website #1")))

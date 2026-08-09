@@ -202,13 +202,15 @@ and the `MONITOR_SITES_CONF` env var points to it.
 | Restart             | `kubectl -n monitor-sites rollout restart deploy/monitor-sites`      |
 | Stop (pause)        | `kubectl -n monitor-sites scale deploy/monitor-sites --replicas=0`   |
 | Start (resume)      | `kubectl -n monitor-sites scale deploy/monitor-sites --replicas=1`   |
-| Edit config         | Edit `kube/configmap.yaml` → `kubectl apply -f kube/configmap.yaml` → `kubectl -n monitor-sites rollout restart deploy/monitor-sites` |
+| Edit config         | Edit `kube/configmap.yaml` → `kubectl apply -f kube/configmap.yaml` (takes effect in 2-7 minutes) |
 | Swank REPL          | `kubectl -n monitor-sites port-forward deploy/monitor-sites 4011:4011` |
 | Rebuild image       | `docker build -t monitor-sites:dev . && k3d image import monitor-sites:dev -c evo-x2 && kubectl -n monitor-sites rollout restart deploy/monitor-sites` |
 
-Config is re-read every cycle, but ConfigMap volume updates have sync
-lag. Always `rollout restart` after ConfigMap changes for deterministic
-pickup.
+Config is re-read every cycle. ConfigMap volume updates have sync lag
+(~1–2 min), so just wait for the next cycle after applying changes.
+Do **not** `rollout restart` after ConfigMap changes — a restart wipes
+in-memory notification state, which can cause missed UP notifications
+for sites that were down at restart time.
 
 ## Dependencies
 
