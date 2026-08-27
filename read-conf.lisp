@@ -36,6 +36,10 @@
      :ca-cert (:type :string :min-length 2 :max-length 250)
      :user-agent (:type :string :min-length 2 :max-length 200)
      :heartbeat-interval (:type :integer :min 0 :max 604800)
+    :heartbeat-start-at (:type :string
+                         :min-length 4
+                         :max-length 5
+                         :optional t)
      :sites (:type :map
               :min-length 1
               :max-length 100
@@ -79,22 +83,26 @@
 (defun valid-string (path val)
   (pl:pdebug :in "valid-string" :path path :val (clean-value (car path) val))
   (let ((node (apply #'u:tree-get (cons *required-keys* (reverse path)))))
-    (unless (or (stringp val) (and (getf node :optional) (null val)))
-      (report :error `(:in "valid-string"
-                        :status "invalid string"
-                        :path ,(reverse path)
-                        :value ,val)))
-    (let* ((min-length (getf node :min-length))
-            (max-length (getf node :max-length))
-            (val-length (length val)))
-      (unless (<= min-length val-length max-length)
-        (let ((val-clean (clean-value (car path) val)))
-          (report :error `(:in "valid-string"
-                            :status "string length out of bounds"
-                            :min-length ,min-length
-                            :max-length ,max-length
-                            :value-length ,val-length
-                            :value ,val-clean)))))))
+    (cond
+      ;; Absent optional key: nothing more to check.
+      ((and (getf node :optional) (null val)))
+      ((not (stringp val))
+        (report :error `(:in "valid-string"
+                          :status "invalid string"
+                          :path ,(reverse path)
+                          :value ,val)))
+      (t
+        (let* ((min-length (getf node :min-length))
+                (max-length (getf node :max-length))
+                (val-length (length val)))
+          (unless (<= min-length val-length max-length)
+            (let ((val-clean (clean-value (car path) val)))
+              (report :error `(:in "valid-string"
+                                :status "string length out of bounds"
+                                :min-length ,min-length
+                                :max-length ,max-length
+                                :value-length ,val-length
+                                :value ,val-clean)))))))))
 
 (defun clean-value (key val)
   (case key
@@ -133,7 +141,14 @@
     do (valid-value conf (cons key path))
     collect key into keys
     finally
-    (let ((missing (set-difference (required-keys path) keys))
+    (let* ((spec-node (apply #'u:tree-get
+                             (cons *required-keys* (reverse path))))
+           (missing (set-difference
+                      (remove-if
+                        (lambda (k)
+                          (u:tree-get spec-node k :optional))
+                        (required-keys path))
+                      keys))
            (unknown (set-difference keys (required-keys path))))
       (when missing
         (report :error `(:in "valid-plist"
@@ -306,4 +321,8 @@
                    "monitor-sites-conf.lisp"))
          (conf (cadr (read-from-string (u:slurp path)))))
     (valid-conf conf)
+    ;; Validate :heartbeat-start-at shape too, inside the normal
+    ;; keep-last-good-configuration error path.
+    (when (getf conf :heartbeat-start-at)
+      (parse-hh-mm (getf conf :heartbeat-start-at)))
     conf))

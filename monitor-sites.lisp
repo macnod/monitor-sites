@@ -23,8 +23,15 @@ down notification is sent, and closed when the site recovers.")
 (defvar *connectivity-loss-count* 0
   "Number of connectivity losses since last heartbeat.")
 
-(defvar *heartbeat-elapsed* 0
-  "Seconds accumulated since last heartbeat send.")
+(defvar *next-heartbeat-ut* nil
+  "UT of the next due heartbeat. NIL when the heartbeat is
+disabled. Kept in the past while a send keeps failing, so the
+send is retried every cycle.")
+
+(defvar *heartbeat-settings* nil
+  "Last applied heartbeat settings: (INTERVAL START-AT-STRING).
+Compared with EQUAL against the fresh conf each cycle; a change
+triggers a reschedule.")
 
 (defun http-get (url conf &optional (site-key :none))
   "Wrapper around DRAKMA:HTTP-REQUEST.
@@ -144,15 +151,15 @@ Returns T on success, NIL on failure."
           :content-type "application/json"
           :external-format-out :utf-8
           :additional-headers
-            `(("Authorization" . ,(format nil "Bearer ~a"
-                                    (getf config :mattermost-token))))
+          `(("Authorization" . ,(format nil "Bearer ~a"
+                                  (getf config :mattermost-token))))
           :content json)
         (let ((body-str (decode-body body)))
           (cond
             ((and (<= 200 status-code 299)
                (search "\"id\"" (or body-str "")))
               (pl:pinfo :in "send-mm"
-                :status "sent mattermost message" :message message)
+                :status "sent mattermost message" :text message)
               t)
             (t
               (pl:perror :in "send-mm"
@@ -172,7 +179,7 @@ Returns T on success, NIL on failure."
 (defun local-timezone-offset (&optional (ut (get-universal-time)))
   "Effective local zone offset (hours) at UT, DST included."
   (multiple-value-bind (s m h d mo y dow dstp tz)
-      (decode-universal-time ut)
+    (decode-universal-time ut)
     (declare (ignore s m h d mo y dow))
     (- (abs tz) (if dstp 1 0))))
 
@@ -248,7 +255,7 @@ sleep."
                           (site-link config site-key))
                         config)
                   (setq *sites-down-notified*
-                        (delete site-key *sites-down-notified*)))))
+                    (delete site-key *sites-down-notified*)))))
             (progn
               ;; Still down — announce and record the outage once,
               ;; now that connectivity is confirmed up
@@ -263,7 +270,7 @@ sleep."
                     (getf *site-outages* site-key))))
               (pl:pdebug :in "connectivity-retry-loop"
                 :site name :status "still down")))
-            (return))
+          (return))
         ;; Connectivity is down
         (t
           (incf cx-count)
@@ -298,7 +305,7 @@ connectivity retry loop."
                     (site-link config site-key))
                   config)
             (setq *sites-down-notified*
-                  (delete site-key *sites-down-notified*)))))
+              (delete site-key *sites-down-notified*)))))
       (t
         (pl:pinfo :in "ping-site" :site name :status "down")
         (connectivity-retry-loop site-key config)))))
@@ -404,15 +411,15 @@ Idempotent — no-op if already running."
             do (format s "  ~a: ~d outage~:p~%"
                  (site-link *conf* key) (length events))
             (dolist (event (sort (copy-list events) #'<
-                              :key (lambda (e) (getf e :detected))))
+                             :key (lambda (e) (getf e :detected))))
               (let ((stamp (format-local-time (getf event :detected))))
                 (if (getf event :recovered)
-                  (format s "    - detected ~a, lasted ~a~%"
+                  (format s "  - detected ~a, lasted ~a~%"
                     stamp
                     (format-duration
                       (- (getf event :recovered)
                         (getf event :detected))))
-                  (format s "    - detected ~a, still down (~a so far)~%"
+                  (format s "  - detected ~a, still down (~a so far)~%"
                     stamp
                     (format-duration
                       (- (get-universal-time)
@@ -420,27 +427,112 @@ Idempotent — no-op if already running."
         (format s "Connectivity losses: ~d"
           *connectivity-loss-count*)))))
 
+(defun parse-hh-mm (string)
+  "Parse \"h:mm\" or \"hh:mm\" on a 24-hour clock.
+Returns (values hour minute); signals an error via REPORT otherwise,
+so a bad value keeps the last good configuration."
+  (multiple-value-bind (match groups)
+    (re:scan-to-strings "^(\\d{1,2}):(\\d{2})$" string)
+    (flet ((bad ()
+             (report :error `(:in "parse-hh-mm"
+                               :status "invalid :heartbeat-start-at"
+                               :value ,string))))
+      (if (null match)
+        (bad)
+        (let ((hour (parse-integer (aref groups 0)))
+               (minute (parse-integer (aref groups 1))))
+          (if (and (< hour 24) (< minute 60))
+            (values hour minute)
+            (bad)))))))
+
+(defun next-occurrence (hh mm &optional (now (get-universal-time)))
+  "UT of the next HH:MM local wall-clock time strictly after NOW."
+  (multiple-value-bind (ns nm nh nd nmonth ny)
+    (decode-universal-time now)
+    (declare (ignore ns nm nh))
+    (labels
+      ((at-offset (day-offset offset)
+         (encode-universal-time
+           0 mm hh (+ nd day-offset) nmonth ny offset))
+        (corrected (day-offset)
+          ;; Encode with the zone offset at NOW, then re-encode with
+          ;; the offset effective at that candidate, so a DST edge
+          ;; between NOW and the target cannot shift the wall-clock
+          ;; time.
+          (at-offset day-offset
+            (local-timezone-offset
+              (at-offset day-offset (local-timezone-offset now))))))
+      (let ((today (corrected 0)))
+        (if (> today now)
+          today
+          (corrected 1))))))
+
+(defun format-local-datetime (ut)
+  "Format universal time UT as a local timestamp: YYYY-MM-DD HH:MM."
+  (dt:timestamp-string
+    :universal-time ut
+    :timezone (local-timezone-offset ut)
+    :format "%Y-%M-%D %h:%m"))
+
+(defun schedule-heartbeat (conf)
+  "Compute and store the next heartbeat due time from CONF.
+Called at boot and whenever the heartbeat settings change."
+  (let ((interval (getf conf :heartbeat-interval))
+         (start-at (getf conf :heartbeat-start-at)))
+    (setq *heartbeat-settings* (list interval start-at))
+    (cond
+      ((zerop interval)
+        (setq *next-heartbeat-ut* nil)
+        (when start-at
+          (pl:pwarn :in "schedule-heartbeat"
+            :status "heartbeat disabled; :heartbeat-start-at ignored")))
+      (start-at
+        (multiple-value-bind (hh mm) (parse-hh-mm start-at)
+          (setq *next-heartbeat-ut* (next-occurrence hh mm)))
+        (pl:pinfo :in "schedule-heartbeat"
+          :status "heartbeat scheduled"
+          :interval interval
+          :start-at start-at
+          :next-heartbeat-ut (format-local-datetime *next-heartbeat-ut*)))
+      (t
+        (setq *next-heartbeat-ut*
+          (+ (get-universal-time) interval))
+        (pl:pinfo :in "schedule-heartbeat"
+          :status "heartbeat scheduled"
+          :interval interval
+          :next-heartbeat-ut (format-local-datetime *next-heartbeat-ut*))))))
+
 (defun maybe-send-heartbeat ()
-  "Send heartbeat if interval has elapsed. Reset stats on send."
-  (let ((interval (getf *conf* :heartbeat-interval)))
-    (when (and (> interval 0) (>= *heartbeat-elapsed* interval))
-      (let ((message (build-heartbeat-message)))
-        (when (send-mm message *conf*)
-          (setq
-            *heartbeat-elapsed* 0
-            *connectivity-loss-count* 0)
-          ;; Closed events have been reported; drop them. Keep open
-          ;; (still-down) events with their original :DETECTED stamps,
-          ;; so one ongoing outage is never split across heartbeats.
-          ;; Events for sites no longer in the config are dropped too.
-          (setq *site-outages*
-            (loop for (key events) on *site-outages* by #'cddr
-              for open = (remove-if
-                           (lambda (e) (getf e :recovered)) events)
-              when (and open (u:tree-get *conf* :sites key))
-              collect key and collect open)))
+  "Send heartbeat when due, then advance the schedule.
+Missed slots collapse into a single beat; on send failure the next
+due time stays in the past and is retried next cycle."
+  (when (and *next-heartbeat-ut*
+          (>= (get-universal-time) *next-heartbeat-ut*))
+    (let ((message (build-heartbeat-message))
+           (interval (getf *conf* :heartbeat-interval)))
+      (when (send-mm message *conf*)
+        ;; Advance to the first slot strictly after now.
+        (setq *next-heartbeat-ut*
+          (+ *next-heartbeat-ut*
+            (* interval
+              (max 1
+                (ceiling (- (get-universal-time) *next-heartbeat-ut*)
+                  interval)))))
+        (setq *connectivity-loss-count* 0)
+        ;; Closed events have been reported; drop them. Keep open
+        ;; (still-down) events with their original :DETECTED stamps,
+        ;; so one ongoing outage is never split across heartbeats.
+        ;; Events for sites no longer in the config are dropped too.
+        (setq *site-outages*
+          (loop for (key events) on *site-outages* by #'cddr
+            for open = (remove-if
+                         (lambda (e) (getf e :recovered)) events)
+            when (and open (u:tree-get *conf* :sites key))
+            collect key and collect open))
         (pl:pinfo :in "maybe-send-heartbeat" :status "heartbeat sent"
-          :message message)))))
+          :text message
+          :next-heartbeat-ut
+          (format-local-datetime *next-heartbeat-ut*))))))
 
 ;;; ================================================================
 ;;; Main Loop
@@ -462,7 +554,6 @@ Assumes *CONF* is non-nil."
               *conf*)
         (setq *cx-lost-notified* nil)))
     ;; Heartbeat
-    (incf *heartbeat-elapsed* (getf *conf* :check-interval))
     (maybe-send-heartbeat)
     (pl:pinfo :in "main" :status "cycle complete")))
 
@@ -483,6 +574,12 @@ Assumes *CONF* is non-nil."
         (setf
           *conf* new-conf
           *http-port* new-port)
+        ;; Reschedule the heartbeat when its settings changed;
+        ;; identical settings keep the existing schedule.
+        (unless (equal *heartbeat-settings*
+                  (list (getf new-conf :heartbeat-interval)
+                    (getf new-conf :heartbeat-start-at)))
+          (schedule-heartbeat *conf*))
         (run-cycle)
         (sleep (getf *conf* :check-interval)))
       (error (e)

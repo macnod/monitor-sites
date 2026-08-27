@@ -13,7 +13,8 @@
    :ca-directory "/etc/ssl/certs"
    :ca-cert "ca-bundle.crt"
    :user-agent "Monitor Sites <your-email-address>"
-   :heartbeat-interval 84600
+   :heartbeat-interval 86400
+   :heartbeat-start-at "09:00"
    :sites (:sinister-code (:name "Site #1"
                             :url "<site-1-url>"
                             :expect "<some-string>")))

@@ -75,7 +75,8 @@ restarting. See `monitor-sites-conf.lisp.example` for the full format.
 | `:ca-directory`              | string  | Directory containing CA certificates                    |
 | `:ca-cert`                   | string  | CA certificate bundle filename                          |
 | `:user-agent`                | string  | Default User-Agent for HTTP requests                    |
-| `:heartbeat-interval`        | integer | Seconds between heartbeat notifications, 0 disables (0-604800, default 84600) |
+| `:heartbeat-interval`        | integer | Seconds between heartbeat notifications, 0 disables (0-604800) |
+| `:heartbeat-start-at`        | string  | Optional local wall-clock anchor for heartbeats, "h:mm" or "hh:mm" 24h |
 | `:sites`                     | map     | Site definitions (see below)                            |
 
 ### Site entries
@@ -153,9 +154,29 @@ When a site is down:
 ### Heartbeat
 
 Monitor Sites sends a periodic "still alive" heartbeat to Mattermost
-to confirm it is running. The interval is controlled by
-`:heartbeat-interval` (default 84600 seconds, just under 24 hours).
-Set it to 0 to disable the heartbeat entirely.
+to confirm it is running.
+
+`:heartbeat-interval` is the cadence in seconds (0 disables the
+heartbeat entirely; 86400 for daily, 43200 for twice daily).
+`:heartbeat-start-at`, when set, anchors the schedule to a local
+wall-clock time, "h:mm" or "hh:mm" on a 24-hour clock, for example
+"09:00". With an anchor, the first beat lands at the next
+occurrence of that time strictly after startup; subsequent beats
+follow the interval from that anchor. Without an anchor, the first
+beat is one interval after startup and the cadence continues from
+there. The schedule is re-anchored the same way on restart or
+whenever either setting changes in the config.
+
+Firing granularity is one check interval: an anchored time of
+"09:00" means 09:00 within one `:check-interval`. A time due
+exactly now goes to the next day. Missed slots (long outage,
+process paused) collapse into a single catch-up beat rather than a
+burst. While Mattermost is unreachable, the due time stays in the
+past and the send is retried every cycle until it succeeds.
+
+After a DST transition the local beat time shifts by one hour and
+stays shifted until the next re-anchor (restart or settings
+change); the schedule is pure arithmetic on universal time.
 
 Each heartbeat message includes outage statistics accumulated since
 the last heartbeat: the number of times each site went down, and the
