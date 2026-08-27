@@ -14,8 +14,11 @@
   alert deduplication — a site is added when first reported down and
   removed when it recovers.")
 
-(defvar *site-down-counts* nil
-  "Plist mapping site keys to outage counts since last heartbeat.")
+(defvar *site-outages* nil
+  "Plist mapping site keys to lists of outage event plists.
+Each event is (:detected <universal-time> :recovered <ut-or-nil>).
+Only announced outages are recorded: an event is created when the
+down notification is sent, and closed when the site recovers.")
 
 (defvar *connectivity-loss-count* 0
   "Number of connectivity losses since last heartbeat.")
@@ -163,16 +166,65 @@ Returns T on success, NIL on failure."
         nil))))
 
 ;;; ================================================================
+;;; Outage Ledger and Formatting Helpers
+;;; ================================================================
+
+(defun local-timezone-offset (&optional (ut (get-universal-time)))
+  "Effective local zone offset (hours) at UT, DST included."
+  (multiple-value-bind (s m h d mo y dow dstp tz)
+      (decode-universal-time ut)
+    (declare (ignore s m h d mo y dow))
+    (- (abs tz) (if dstp 1 0))))
+
+(defun format-local-time (ut)
+  "Format universal time UT as a local timestamp: MM-DD HH:MM."
+  (dt:timestamp-string
+    :universal-time ut
+    :timezone (local-timezone-offset ut)
+    :format "%M-%D %h:%m"))
+
+(defun format-duration (seconds)
+  "Format SECONDS compactly: 47s, 3m 42s, 2h 14m, 1d 3h."
+  (let ((s (max 0 (floor seconds))))
+    (cond
+      ((< s 60) (format nil "~ds" s))
+      ((< s 3600)
+        (multiple-value-bind (m sec) (floor s 60)
+          (format nil "~dm ~ds" m sec)))
+      ((< s 86400)
+        (multiple-value-bind (h rem) (floor s 3600)
+          (format nil "~dh ~dm" h (floor rem 60))))
+      (t
+        (multiple-value-bind (d rem) (floor s 86400)
+          (format nil "~dd ~dh" d (floor rem 3600)))))))
+
+(defun site-link (config site-key)
+  "Site display name as a Markdown link to its URL."
+  (format nil "[~a](~a)"
+    (u:tree-get config :sites site-key :name)
+    (u:tree-get config :sites site-key :url)))
+
+(defun close-open-outage (site-key)
+  "Close the open outage event for SITE-KEY, if any, stamping
+:RECOVERED with the current time. Returns T when an event was
+closed, NIL otherwise."
+  (let ((open (find-if
+                (lambda (e) (null (getf e :recovered)))
+                (getf *site-outages* site-key))))
+    (when open
+      (setf (getf open :recovered) (get-universal-time))
+      t)))
+
+;;; ================================================================
 ;;; Per-Site Check Logic
 ;;; ================================================================
 
 (defun connectivity-retry-loop (site-key config)
   "Handle the connectivity-check loop when a site is down.
-If connectivity is up, notify about the site being down (once).
-If connectivity is lost, notify once and sleep."
-  (let* ((site-node (u:tree-get config :sites site-key))
-          (name (getf site-node :name))
-          (url (getf site-node :url))
+If connectivity is up, notify about the site being down (once) and
+record the outage event. If connectivity is lost, notify once and
+sleep."
+  (let* ((name (u:tree-get config :sites site-key :name))
           (cx-count 0)
           (max-retries (getf config :max-connectivity-retries))
           (retry-time (getf config :retry-connectivity-time))
@@ -187,22 +239,28 @@ If connectivity is lost, notify once and sleep."
             (progn
               (pl:pinfo :in "connectivity-retry-loop"
                 :site name :status "recovered")
+              (close-open-outage site-key)
               ;; Recovery notification handled by ping-site on next cycle,
               ;; but handle it here too since we return immediately
               (when (member site-key *sites-down-notified*)
-                (when (send-mm (format nil "Site ~a has recovered." name)
+                (when (send-mm
+                        (format nil "Site ~a has recovered."
+                          (site-link config site-key))
                         config)
                   (setq *sites-down-notified*
                         (delete site-key *sites-down-notified*)))))
             (progn
-              ;; Still down — notify once, now that connectivity
-              ;; is confirmed up
+              ;; Still down — announce and record the outage once,
+              ;; now that connectivity is confirmed up
               (unless (member site-key *sites-down-notified*)
                 (when (send-mm
-                        (format nil "Site ~a (~a) is not responding."
-                          name url)
+                        (format nil "Site ~a is not responding."
+                          (site-link config site-key))
                         config)
-                  (push site-key *sites-down-notified*)))
+                  (push site-key *sites-down-notified*)
+                  (push (list :detected (get-universal-time)
+                          :recovered nil)
+                    (getf *site-outages* site-key))))
               (pl:pdebug :in "connectivity-retry-loop"
                 :site name :status "still down")))
             (return))
@@ -224,19 +282,25 @@ If connectivity is lost, notify once and sleep."
 
 (defun ping-site (site-key config)
   "Check a single site and handle connectivity-loss logic.
-If the site is up (and was previously down), notify recovery.
-If down, enter the connectivity retry loop."
+If the site is up (and was previously down), notify recovery and
+close its open outage event. If down, dispatch into the
+connectivity retry loop."
   (let ((name (u:tree-get config :sites site-key :name)))
     (cond
       ((site-up-p site-key config)
         (pl:pinfo :in "ping-site" :site name :status "up")
+        ;; Close the open outage event even if the recovery notice
+        ;; cannot be sent; the outage itself is over.
+        (close-open-outage site-key)
         (when (member site-key *sites-down-notified*)
-          (when (send-mm (format nil "Site ~a has recovered." name) config)
+          (when (send-mm
+                  (format nil "Site ~a has recovered."
+                    (site-link config site-key))
+                  config)
             (setq *sites-down-notified*
                   (delete site-key *sites-down-notified*)))))
       (t
         (pl:pinfo :in "ping-site" :site name :status "down")
-        (incf (getf *site-down-counts* site-key 0))
         (connectivity-retry-loop site-key config)))))
 
 ;;; ================================================================
@@ -325,19 +389,34 @@ Idempotent — no-op if already running."
 ;;; ================================================================
 
 (defun build-heartbeat-message ()
-  "Build the heartbeat message string from accumulated stats."
-  (let ((down-sites
-          (loop for (key count) on *site-down-counts* by #'cddr
-            when (> count 0)
-            collect (cons key count))))
-    (if (and (null down-sites) (zerop *connectivity-loss-count*))
+  "Build the heartbeat message string from the outage ledger."
+  (let ((outage-sites
+          (loop for (key events) on *site-outages* by #'cddr
+            when (and events (u:tree-get *conf* :sites key))
+            collect (cons key events))))
+    (if (and (null outage-sites) (zerop *connectivity-loss-count*))
       "Monitor Sites is still running. No outages since last heartbeat."
       (with-output-to-string (s)
         (format s "Monitor Sites is still running.~%")
-        (format s "~%Outages since last heartbeat:~%")
-        (loop for (key . count) in down-sites
-          do (format s "  ~a: ~d~%"
-               (u:tree-get *conf* :sites key :name) count))
+        (when outage-sites
+          (format s "~%Outages since last heartbeat:~%")
+          (loop for (key . events) in outage-sites
+            do (format s "  ~a: ~d outage~:p~%"
+                 (site-link *conf* key) (length events))
+            (dolist (event (sort (copy-list events) #'<
+                              :key (lambda (e) (getf e :detected))))
+              (let ((stamp (format-local-time (getf event :detected))))
+                (if (getf event :recovered)
+                  (format s "    - detected ~a, lasted ~a~%"
+                    stamp
+                    (format-duration
+                      (- (getf event :recovered)
+                        (getf event :detected))))
+                  (format s "    - detected ~a, still down (~a so far)~%"
+                    stamp
+                    (format-duration
+                      (- (get-universal-time)
+                        (getf event :detected)))))))))
         (format s "Connectivity losses: ~d"
           *connectivity-loss-count*)))))
 
@@ -349,8 +428,17 @@ Idempotent — no-op if already running."
         (when (send-mm message *conf*)
           (setq
             *heartbeat-elapsed* 0
-            *site-down-counts* nil
-            *connectivity-loss-count* 0))
+            *connectivity-loss-count* 0)
+          ;; Closed events have been reported; drop them. Keep open
+          ;; (still-down) events with their original :DETECTED stamps,
+          ;; so one ongoing outage is never split across heartbeats.
+          ;; Events for sites no longer in the config are dropped too.
+          (setq *site-outages*
+            (loop for (key events) on *site-outages* by #'cddr
+              for open = (remove-if
+                           (lambda (e) (getf e :recovered)) events)
+              when (and open (u:tree-get *conf* :sites key))
+              collect key and collect open)))
         (pl:pinfo :in "maybe-send-heartbeat" :status "heartbeat sent"
           :message message)))))
 
