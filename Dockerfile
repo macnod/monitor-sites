@@ -15,7 +15,9 @@ RUN apt update && apt upgrade -y && apt install -y \
     git \
     libcurl4-openssl-dev \
     tar \
-    zlib1g-dev
+    tzdata \
+    zlib1g-dev \
+    && ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
 
 # Install Roswell
 RUN url="${ROSWELL_URL_PREFIX}/${ROSWELL_VERSION}/roswell_${ROSWELL_VERSION#v}-1_amd64.deb" \
